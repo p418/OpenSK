@@ -1,16 +1,3 @@
-diff --git a/arch/cortex-m/src/scb.rs b/arch/cortex-m/src/scb.rs
-index 8107f165..1380c591 100644
---- a/arch/cortex-m/src/scb.rs
-+++ b/arch/cortex-m/src/scb.rs
-@@ -54,3 +54,8 @@ pub unsafe fn reset() {
-     let reset = (0x5FA << 16) | (aircr & (0x7 << 8)) | (1 << 2);
-     SCB.aircr.set(reset);
- }
-+
-+/// relocate interrupt vector table
-+pub unsafe fn set_vector_table_offset(offset: u32) {
-+    SCB.vtor.set(offset);
-+}
 diff --git a/boards/nordic/nrf52840_dongle/Makefile b/boards/nordic/nrf52840_dongle/Makefile
 index 61dc5759..917a317c 100644
 --- a/boards/nordic/nrf52840_dongle/Makefile
@@ -62,7 +49,7 @@ index 31d0b392..2d795ebb 100644
  
 +    // relocate vector table, interrupt vector table is at 0x1000
 +    scb::set_vector_table_offset(0x00001000);
-+    
++
      let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
      // GPIOs
      let gpio = components::gpio::GpioComponent::new(board_kernel).finalize(
