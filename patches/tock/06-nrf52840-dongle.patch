@@ -1,15 +1,56 @@
+diff --git a/boards/acd52832/src/main.rs b/boards/acd52832/src/main.rs
+index c844ccaf..d60bbc00 100644
+--- a/boards/acd52832/src/main.rs
++++ b/boards/acd52832/src/main.rs
+@@ -304,23 +304,26 @@ pub unsafe fn reset_handler() {
+     );
+ 
+     // RTT communication channel
++    let name = b"Terminal\0";
++    let up_buffer_name = name;
++    let down_buffer_name = name;
++    let up_buffer = static_init!([u8; 1024], [0; 1024]);
++    let down_buffer = static_init!([u8; 32], [0; 32]);
++
+     let rtt_memory = static_init!(
+         capsules::segger_rtt::SeggerRttMemory,
+-        capsules::segger_rtt::SeggerRttMemory::new(
+-            b"Terminal\0",
+-            &mut capsules::segger_rtt::UP_BUFFER,
+-            b"Terminal\0",
+-            &mut capsules::segger_rtt::DOWN_BUFFER
++        capsules::segger_rtt::SeggerRttMemory::new_raw(
++            up_buffer_name,
++            up_buffer.as_ptr(),
++            up_buffer.len(),
++            down_buffer_name,
++            down_buffer.as_ptr(),
++            down_buffer.len()
+         )
+     );
+     let rtt = static_init!(
+         capsules::segger_rtt::SeggerRtt<VirtualMuxAlarm<'static, nrf52832::rtc::Rtc>>,
+-        capsules::segger_rtt::SeggerRtt::new(
+-            virtual_alarm_rtt,
+-            rtt_memory,
+-            &mut capsules::segger_rtt::UP_BUFFER,
+-            &mut capsules::segger_rtt::DOWN_BUFFER
+-        )
++        capsules::segger_rtt::SeggerRtt::new(virtual_alarm_rtt, rtt_memory, up_buffer, down_buffer)
+     );
+     hil::time::Alarm::set_client(virtual_alarm_rtt, rtt);
+ 
 diff --git a/boards/nordic/nrf52840_dongle/Makefile b/boards/nordic/nrf52840_dongle/Makefile
-index 61dc5759..917a317c 100644
+index 61dc5759..73cf43c9 100644
 --- a/boards/nordic/nrf52840_dongle/Makefile
 +++ b/boards/nordic/nrf52840_dongle/Makefile
-@@ -23,7 +23,13 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
+@@ -23,7 +23,12 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
  flash: target/$(TARGET)/release/$(PLATFORM).bin
  	$(TOCKLOADER) $(TOCKLOADER_GENERAL_FLAGS) flash --address $(KERNEL_ADDRESS) $(TOCKLOADER_JTAG_FLAGS) $<
  
 +target/$(TARGET)/release/$(PLATFORM).hex: target/$(TARGET)/release/$(PLATFORM).elf
-+	arm-none-eabi-objcopy -I binary -O ihex $^ $@
 +# 	$(Q)$(OBJCOPY) --output-target=ihex $^ $@       # llvm-objcopy generates a different hex file
-+#	$(Q)objcopy --output-target=ihex $^ $@
++	$(Q)objcopy --output-target=ihex $^ $@
 +
 +
  # Upload the kernel over serial/bootloader
@@ -32,10 +73,10 @@ index 657b0d26..58c85f5b 100644
  }
  
 diff --git a/boards/nordic/nrf52840_dongle/src/main.rs b/boards/nordic/nrf52840_dongle/src/main.rs
-index 31d0b392..2d795ebb 100644
+index 31d0b392..3b72db85 100644
 --- a/boards/nordic/nrf52840_dongle/src/main.rs
 +++ b/boards/nordic/nrf52840_dongle/src/main.rs
-@@ -7,6 +7,7 @@
+@@ -7,11 +7,12 @@
  #![no_main]
  #![deny(missing_docs)]
  
@@ -43,6 +84,12 @@ index 31d0b392..2d795ebb 100644
  use kernel::component::Component;
  #[allow(unused_imports)]
  use kernel::{debug, debug_gpio, debug_verbose, static_init};
+ use nrf52840::gpio::Pin;
+-use nrf52dk_base::{SpiPins, UartPins};
++use nrf52dk_base::{SpiPins, UartChannel, UartPins};
+ 
+ // The nRF52840 Dongle LEDs
+ const LED1_PIN: Pin = Pin::P0_06;
 @@ -60,6 +61,9 @@ pub unsafe fn reset_handler() {
      // Loads relocations and clears BSS
      nrf52840::init();
@@ -53,3 +100,1049 @@ index 31d0b392..2d795ebb 100644
      let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
      // GPIOs
      let gpio = components::gpio::GpioComponent::new(board_kernel).finalize(
+@@ -130,7 +134,7 @@ pub unsafe fn reset_handler() {
+         LED2_G_PIN,
+         LED2_B_PIN,
+         led,
+-        &UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD),
++        UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD)),
+         &SpiPins::new(SPI_MOSI, SPI_MISO, SPI_CLK),
+         &None,
+         button,
+@@ -140,6 +144,7 @@ pub unsafe fn reset_handler() {
+         FAULT_RESPONSE,
+         nrf52840::uicr::Regulator0Output::V3_0,
+         false,
++        &Some(&nrf52840::usbd::USBD),
+         chip,
+     );
+ }
+diff --git a/boards/nordic/nrf52840dk/Cargo.toml b/boards/nordic/nrf52840dk/Cargo.toml
+index 171c497f..9d16f679 100644
+--- a/boards/nordic/nrf52840dk/Cargo.toml
++++ b/boards/nordic/nrf52840dk/Cargo.toml
+@@ -17,6 +17,10 @@ lto = true
+ opt-level = "z"
+ debug = true
+ 
++[features]
++usb_debugging = []
++default = ["usb_debugging"]
++
+ [dependencies]
+ components = { path = "../../components" }
+ cortexm4 = { path = "../../../arch/cortex-m4" }
+diff --git a/boards/nordic/nrf52840dk/src/io.rs b/boards/nordic/nrf52840dk/src/io.rs
+index 4c4f3bf3..608fa9ca 100644
+--- a/boards/nordic/nrf52840dk/src/io.rs
++++ b/boards/nordic/nrf52840dk/src/io.rs
+@@ -1,19 +1,46 @@
+ use core::fmt::Write;
+ use core::panic::PanicInfo;
+ use cortexm4;
++#[cfg(feature = "usb_debugging")]
++use kernel::common::cells::TakeCell;
+ use kernel::debug;
+ use kernel::debug::IoWrite;
+ use kernel::hil::led;
++#[cfg(not(feature = "usb_debugging"))]
+ use kernel::hil::uart::{self, Configure};
+ use nrf52840::gpio::Pin;
+ 
+ use crate::PROCESSES;
+ 
+ struct Writer {
++    #[cfg(not(feature = "usb_debugging"))]
+     initialized: bool,
++    #[cfg(feature = "usb_debugging")]
++    rtt_memory: TakeCell<'static, capsules::segger_rtt::SeggerRttMemory<'static>>,
+ }
+ 
++#[cfg(not(feature = "usb_debugging"))]
+ static mut WRITER: Writer = Writer { initialized: false };
++#[cfg(feature = "usb_debugging")]
++static mut WRITER: Writer = Writer {
++    rtt_memory: TakeCell::empty(),
++};
++
++#[cfg(feature = "usb_debugging")]
++fn wait() {
++    let mut x = 0;
++    for i in 0..5000 {
++        unsafe { core::ptr::write_volatile(&mut x as *mut _, i) };
++    }
++}
++
++/// Set the RTT memory buffer used to output panic messages.
++#[cfg(feature = "usb_debugging")]
++pub unsafe fn set_rtt_memory(
++    rtt_memory: &'static mut capsules::segger_rtt::SeggerRttMemory<'static>,
++) {
++    WRITER.rtt_memory.replace(rtt_memory);
++}
+ 
+ impl Write for Writer {
+     fn write_str(&mut self, s: &str) -> ::core::fmt::Result {
+@@ -23,6 +50,7 @@ impl Write for Writer {
+ }
+ 
+ impl IoWrite for Writer {
++    #[cfg(not(feature = "usb_debugging"))]
+     fn write(&mut self, buf: &[u8]) {
+         let uart = unsafe { &mut nrf52840::uart::UARTE0 };
+         if !self.initialized {
+@@ -42,6 +70,30 @@ impl IoWrite for Writer {
+             while !uart.tx_ready() {}
+         }
+     }
++
++    #[cfg(feature = "usb_debugging")]
++    fn write(&mut self, buf: &[u8]) {
++        // TODO: initialize if needed.
++        self.rtt_memory.map(|rtt_memory| {
++            let up_buffer = &mut rtt_memory.up_buffer;
++            let buffer_len = up_buffer.length.get();
++            let buffer = unsafe {
++                core::slice::from_raw_parts_mut(
++                    up_buffer.buffer.get() as *mut u8,
++                    buffer_len as usize,
++                )
++            };
++
++            let mut write_position = up_buffer.write_position.get();
++
++            for &c in buf {
++                buffer[write_position as usize] = c;
++                write_position = (write_position + 1) % buffer_len;
++                up_buffer.write_position.set(write_position);
++                wait();
++            }
++        });
++    }
+ }
+ 
+ #[cfg(not(test))]
+diff --git a/boards/nordic/nrf52840dk/src/main.rs b/boards/nordic/nrf52840dk/src/main.rs
+index 57c42436..e8247905 100644
+--- a/boards/nordic/nrf52840dk/src/main.rs
++++ b/boards/nordic/nrf52840dk/src/main.rs
+@@ -68,7 +68,9 @@ use kernel::component::Component;
+ #[allow(unused_imports)]
+ use kernel::{debug, debug_gpio, debug_verbose, static_init};
+ use nrf52840::gpio::Pin;
+-use nrf52dk_base::{SpiMX25R6435FPins, SpiPins, UartPins};
++#[cfg(not(feature = "usb_debugging"))]
++use nrf52dk_base::UartPins;
++use nrf52dk_base::{SpiMX25R6435FPins, SpiPins, UartChannel};
+ 
+ // The nRF52840DK LEDs (see back of board)
+ const LED1_PIN: Pin = Pin::P0_13;
+@@ -83,9 +85,13 @@ const BUTTON3_PIN: Pin = Pin::P0_24;
+ const BUTTON4_PIN: Pin = Pin::P0_25;
+ const BUTTON_RST_PIN: Pin = Pin::P0_18;
+ 
++#[cfg(not(feature = "usb_debugging"))]
+ const UART_RTS: Pin = Pin::P0_05;
++#[cfg(not(feature = "usb_debugging"))]
+ const UART_TXD: Pin = Pin::P0_06;
++#[cfg(not(feature = "usb_debugging"))]
+ const UART_CTS: Pin = Pin::P0_07;
++#[cfg(not(feature = "usb_debugging"))]
+ const UART_RXD: Pin = Pin::P0_08;
+ 
+ const SPI_MOSI: Pin = Pin::P0_20;
+@@ -107,7 +113,7 @@ const FAULT_RESPONSE: kernel::procs::FaultResponse = kernel::procs::FaultRespons
+ const NUM_PROCS: usize = 8;
+ 
+ #[link_section = ".app_memory"]
+-static mut APP_MEMORY: [u8; 245760] = [0; 245760];
++static mut APP_MEMORY: [u8; 0x3A000] = [0; 0x3A000];
+ 
+ static mut PROCESSES: [Option<&'static dyn kernel::procs::ProcessType>; NUM_PROCS] =
+     [None, None, None, None, None, None, None, None];
+@@ -123,6 +129,37 @@ pub unsafe fn reset_handler() {
+     // Loads relocations and clears BSS
+     nrf52840::init();
+ 
++    // Initialize Segger RTT as early as possible so that any panic beyond this point can use the
++    // RTT memory object.
++    #[cfg(feature = "usb_debugging")]
++    let (up_buffer, down_buffer, rtt_memory) = {
++        let name = b"Terminal\0";
++        let up_buffer_name = name;
++        let down_buffer_name = name;
++        let up_buffer = static_init!([u8; 1024], [0; 1024]);
++        let down_buffer = static_init!([u8; 32], [0; 32]);
++
++        let rtt_memory = static_init!(
++            capsules::segger_rtt::SeggerRttMemory,
++            capsules::segger_rtt::SeggerRttMemory::new_raw(
++                up_buffer_name,
++                up_buffer.as_ptr(),
++                up_buffer.len(),
++                down_buffer_name,
++                down_buffer.as_ptr(),
++                down_buffer.len()
++            )
++        );
++
++        (up_buffer, down_buffer, rtt_memory)
++    };
++
++    // XXX: This is inherently unsafe as it aliases the mutable reference to rtt_memory. This
++    // aliases reference is only used inside a panic handler, which should be OK, but maybe we
++    // should use a const reference to rtt_memory and leverage interior mutability instead.
++    #[cfg(feature = "usb_debugging")]
++    self::io::set_rtt_memory(&mut *(rtt_memory as *mut _));
++
+     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
+     let gpio = components::gpio::GpioComponent::new(board_kernel).finalize(
+         components::gpio_component_helper!(
+@@ -198,7 +235,10 @@ pub unsafe fn reset_handler() {
+         LED2_PIN,
+         LED3_PIN,
+         led,
+-        &UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD),
++        #[cfg(feature = "usb_debugging")]
++        UartChannel::Rtt(up_buffer, down_buffer, rtt_memory),
++        #[cfg(not(feature = "usb_debugging"))]
++        UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD)),
+         &SpiPins::new(SPI_MOSI, SPI_MISO, SPI_CLK),
+         &Some(SpiMX25R6435FPins::new(
+             SPI_MX25R6435F_CHIP_SELECT,
+@@ -212,6 +252,7 @@ pub unsafe fn reset_handler() {
+         FAULT_RESPONSE,
+         nrf52840::uicr::Regulator0Output::DEFAULT,
+         false,
++        &Some(&nrf52840::usbd::USBD),
+         chip,
+     );
+ }
+diff --git a/boards/nordic/nrf52dk/src/main.rs b/boards/nordic/nrf52dk/src/main.rs
+index 693f1e18..39f996c4 100644
+--- a/boards/nordic/nrf52dk/src/main.rs
++++ b/boards/nordic/nrf52dk/src/main.rs
+@@ -68,7 +68,7 @@ use kernel::component::Component;
+ #[allow(unused_imports)]
+ use kernel::{debug, debug_gpio, debug_verbose, static_init};
+ use nrf52832::gpio::Pin;
+-use nrf52dk_base::{SpiPins, UartPins};
++use nrf52dk_base::{SpiPins, UartChannel, UartPins};
+ 
+ // The nRF52 DK LEDs (see back of board)
+ const LED1_PIN: Pin = Pin::P0_17;
+@@ -199,7 +199,7 @@ pub unsafe fn reset_handler() {
+         LED2_PIN,
+         LED3_PIN,
+         led,
+-        &UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD),
++        UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD)),
+         &SpiPins::new(SPI_MOSI, SPI_MISO, SPI_CLK),
+         &None,
+         button,
+@@ -209,6 +209,7 @@ pub unsafe fn reset_handler() {
+         FAULT_RESPONSE,
+         nrf52832::uicr::Regulator0Output::DEFAULT,
+         false,
++        &None,
+         chip,
+     );
+ }
+diff --git a/boards/nordic/nrf52dk_base/src/lib.rs b/boards/nordic/nrf52dk_base/src/lib.rs
+index 17be93a4..d391e455 100644
+--- a/boards/nordic/nrf52dk_base/src/lib.rs
++++ b/boards/nordic/nrf52dk_base/src/lib.rs
+@@ -70,6 +70,15 @@ impl UartPins {
+     }
+ }
+ 
++pub enum UartChannel<'a> {
++    Pins(UartPins),
++    Rtt(
++        &'a mut [u8],
++        &'a mut [u8],
++        &'a mut capsules::segger_rtt::SeggerRttMemory<'a>,
++    ),
++}
++
+ /// Supported drivers by the platform
+ pub struct Platform {
+     ble_radio: &'static capsules::ble_advertising_driver::BLE<
+@@ -93,9 +102,17 @@ pub struct Platform {
+         'static,
+         capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
+     >,
++    usb: Option<
++        &'static capsules::usb::usb_ctap::CtapUsbSyscallDriver<
++            'static,
++            'static,
++            nrf52::usbd::Usbd<'static>,
++        >,
++    >,
+     // The nRF52dk does not have the flash chip on it, so we make this optional.
+     nonvolatile_storage:
+         Option<&'static capsules::nonvolatile_storage_driver::NonvolatileStorage<'static>>,
++    nvmc: &'static nrf52::nvmc::SyscallDriver,
+ }
+ 
+ impl kernel::Platform for Platform {
+@@ -119,6 +136,10 @@ impl kernel::Platform for Platform {
+             capsules::nonvolatile_storage_driver::DRIVER_NUM => {
+                 f(self.nonvolatile_storage.map_or(None, |nv| Some(nv)))
+             }
++            nrf52::nvmc::DRIVER_NUM => f(Some(self.nvmc)),
++            capsules::usb::usb_ctap::DRIVER_NUM => {
++                f(self.usb.map(|ctap| ctap as &dyn kernel::Driver))
++            }
+             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
+             _ => f(None),
+         }
+@@ -136,7 +157,7 @@ pub unsafe fn setup_board<I: nrf52::interrupt_service::InterruptService>(
+     debug_pin2_index: Pin,
+     debug_pin3_index: Pin,
+     led: &'static capsules::led::LED<'static>,
+-    uart_pins: &UartPins,
++    uart_channel: UartChannel<'static>,
+     spi_pins: &SpiPins,
+     mx25r6435f: &Option<SpiMX25R6435FPins>,
+     button: &'static capsules::button::Button<'static>,
+@@ -146,6 +167,7 @@ pub unsafe fn setup_board<I: nrf52::interrupt_service::InterruptService>(
+     app_fault_response: kernel::procs::FaultResponse,
+     reg_vout: Regulator0Output,
+     nfc_as_gpios: bool,
++    usb: &Option<&'static nrf52::usbd::Usbd<'static>>,
+     chip: &'static nrf52::chip::NRF52<I>,
+ ) {
+     // Make non-volatile memory writable and activate the reset button
+@@ -232,6 +254,38 @@ pub unsafe fn setup_board<I: nrf52::interrupt_service::InterruptService>(
+     let alarm = components::alarm::AlarmDriverComponent::new(board_kernel, mux_alarm)
+         .finalize(components::alarm_component_helper!(nrf52::rtc::Rtc));
+ 
++    let channel: &dyn kernel::hil::uart::Uart = match uart_channel {
++        UartChannel::Pins(uart_pins) => {
++            nrf52::uart::UARTE0.initialize(
++                nrf52::pinmux::Pinmux::new(uart_pins.txd as u32),
++                nrf52::pinmux::Pinmux::new(uart_pins.rxd as u32),
++                Some(nrf52::pinmux::Pinmux::new(uart_pins.cts as u32)),
++                Some(nrf52::pinmux::Pinmux::new(uart_pins.rts as u32)),
++            );
++            &nrf52::uart::UARTE0
++        }
++        UartChannel::Rtt(up_buffer, down_buffer, rtt_memory) => {
++            // Virtual alarm for the Segger RTT communication channel
++            let virtual_alarm_rtt = static_init!(
++                capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52::rtc::Rtc>,
++                capsules::virtual_alarm::VirtualMuxAlarm::new(mux_alarm)
++            );
++
++            // RTT communication channel
++            let rtt = static_init!(
++                capsules::segger_rtt::SeggerRtt<VirtualMuxAlarm<'static, nrf52::rtc::Rtc>>,
++                capsules::segger_rtt::SeggerRtt::new(
++                    virtual_alarm_rtt,
++                    rtt_memory,
++                    up_buffer,
++                    down_buffer
++                )
++            );
++            hil::time::Alarm::set_client(virtual_alarm_rtt, rtt);
++            rtt
++        }
++    };
++
+     let dynamic_deferred_call_clients =
+         static_init!([DynamicDeferredCallClientState; 2], Default::default());
+     let dynamic_deferred_caller = static_init!(
+@@ -241,19 +295,10 @@ pub unsafe fn setup_board<I: nrf52::interrupt_service::InterruptService>(
+     DynamicDeferredCall::set_global_instance(dynamic_deferred_caller);
+ 
+     // Create a shared UART channel for the console and for kernel debug.
+-    let uart_mux = components::console::UartMuxComponent::new(
+-        &nrf52::uart::UARTE0,
+-        115200,
+-        dynamic_deferred_caller,
+-    )
+-    .finalize(());
+-
+-    nrf52::uart::UARTE0.initialize(
+-        nrf52::pinmux::Pinmux::new(uart_pins.txd as u32),
+-        nrf52::pinmux::Pinmux::new(uart_pins.rxd as u32),
+-        Some(nrf52::pinmux::Pinmux::new(uart_pins.cts as u32)),
+-        Some(nrf52::pinmux::Pinmux::new(uart_pins.rts as u32)),
+-    );
++    let uart_mux =
++        components::console::UartMuxComponent::new(channel, 115200, dynamic_deferred_caller)
++            .finalize(());
++
+     let pconsole =
+         components::process_console::ProcessConsoleComponent::new(board_kernel, uart_mux)
+             .finalize(());
+@@ -376,6 +421,52 @@ pub unsafe fn setup_board<I: nrf52::interrupt_service::InterruptService>(
+         None
+     };
+ 
++    let nvmc = static_init!(
++        nrf52::nvmc::SyscallDriver,
++        nrf52::nvmc::SyscallDriver::new(
++            &nrf52::nvmc::NVMC,
++            board_kernel.create_grant(&memory_allocation_capability)
++        )
++    );
++
++    // Configure USB controller if supported
++    let usb_driver: Option<
++        &'static capsules::usb::usb_ctap::CtapUsbSyscallDriver<
++            'static,
++            'static,
++            nrf52::usbd::Usbd<'static>,
++        >,
++    > = usb.map(|driver| {
++        let usb_ctap = static_init!(
++            capsules::usb::usbc_ctap_hid::ClientCtapHID<
++                'static,
++                'static,
++                nrf52::usbd::Usbd<'static>,
++            >,
++            capsules::usb::usbc_ctap_hid::ClientCtapHID::new(driver)
++        );
++        driver.set_client(usb_ctap);
++
++        // Enable power events to be sent to USB controller
++        nrf52::power::POWER.set_usb_client(driver);
++        nrf52::power::POWER.enable_interrupts();
++
++        // Configure the USB userspace driver
++        let usb_driver = static_init!(
++            capsules::usb::usb_ctap::CtapUsbSyscallDriver<
++                'static,
++                'static,
++                nrf52::usbd::Usbd<'static>,
++            >,
++            capsules::usb::usb_ctap::CtapUsbSyscallDriver::new(
++                usb_ctap,
++                board_kernel.create_grant(&memory_allocation_capability)
++            )
++        );
++        usb_ctap.set_client(usb_driver);
++        usb_driver as &'static _
++    });
++
+     // Start all of the clocks. Low power operation will require a better
+     // approach than this.
+     nrf52::clock::CLOCK.low_stop();
+@@ -407,8 +498,10 @@ pub unsafe fn setup_board<I: nrf52::interrupt_service::InterruptService>(
+         rng: rng,
+         temp: temp,
+         alarm: alarm,
++        usb: usb_driver,
+         nonvolatile_storage: nonvolatile_storage,
+         ipc: kernel::ipc::IPC::new(board_kernel, &memory_allocation_capability),
++        nvmc: nvmc,
+     };
+ 
+     platform.pconsole.start();
+diff --git a/capsules/src/driver.rs b/capsules/src/driver.rs
+index 9305e6a7..40466f44 100644
+--- a/capsules/src/driver.rs
++++ b/capsules/src/driver.rs
+@@ -24,6 +24,7 @@ pub enum NUM {
+     Spi                   = 0x20001,
+     UsbUser               = 0x20005,
+     I2cMasterSlave        = 0x20006,
++    UsbCtap               = 0x20009,
+ 
+     // Radio
+     BleAdvertising        = 0x30000,
+diff --git a/capsules/src/segger_rtt.rs b/capsules/src/segger_rtt.rs
+index 1bf93fc1..33103c57 100644
+--- a/capsules/src/segger_rtt.rs
++++ b/capsules/src/segger_rtt.rs
+@@ -91,67 +91,69 @@
+ //! ```
+ 
+ use core::cell::Cell;
+-use kernel::common::cells::{OptionalCell, TakeCell};
++use core::marker::PhantomData;
++use kernel::common::cells::{OptionalCell, TakeCell, VolatileCell};
+ use kernel::hil;
+ use kernel::hil::time::Frequency;
+ use kernel::hil::uart;
+ use kernel::ReturnCode;
+ 
+-/// Buffer for transmitting to the host.
+-pub static mut UP_BUFFER: [u8; 1024] = [0; 1024];
+-
+-/// Buffer for receiving messages from the host.
+-pub static mut DOWN_BUFFER: [u8; 32] = [0; 32];
+-
+ /// This structure is defined by the segger RTT protocol. It must exist in
+ /// memory in exactly this form so that the segger JTAG tool can find it in the
+ /// chip's memory and read and write messages to the appropriate buffers.
+ #[repr(C)]
+-pub struct SeggerRttMemory {
+-    id: [u8; 16],
+-    number_up_buffers: u32,
+-    number_down_buffers: u32,
+-    up_buffer: SeggerRttBuffer,
+-    down_buffer: SeggerRttBuffer,
++pub struct SeggerRttMemory<'a> {
++    id: VolatileCell<[u8; 16]>,
++    number_up_buffers: VolatileCell<u32>,
++    number_down_buffers: VolatileCell<u32>,
++    pub up_buffer: SeggerRttBuffer<'a>,
++    down_buffer: SeggerRttBuffer<'a>,
+ }
+ 
+ #[repr(C)]
+-pub struct SeggerRttBuffer {
+-    name: *const u8, // Pointer to the name of this channel. Must be a 4 byte thin pointer.
+-    buffer: *const u8, // Pointer to the buffer for this channel.
+-    length: u32,
+-    write_position: u32,
+-    read_position: u32,
+-    flags: u32,
++pub struct SeggerRttBuffer<'a> {
++    name: VolatileCell<*const u8>, // Pointer to the name of this channel. Must be a 4 byte thin pointer.
++    pub buffer: VolatileCell<*const u8>, // Pointer to the buffer for this channel.
++    pub length: VolatileCell<u32>,
++    pub write_position: VolatileCell<u32>,
++    read_position: VolatileCell<u32>,
++    flags: VolatileCell<u32>,
++    _lifetime: PhantomData<&'a [u8]>,
+ }
+ 
+-impl SeggerRttMemory {
+-    pub fn new(
++impl SeggerRttMemory<'a> {
++    pub fn new_raw(
+         up_buffer_name: &'a [u8],
+-        up_buffer: &'static mut [u8],
+-        down_buffer_name: &'static [u8],
+-        down_buffer: &'static mut [u8],
+-    ) -> SeggerRttMemory {
++        up_buffer_ptr: *const u8,
++        up_buffer_len: usize,
++        down_buffer_name: &'a [u8],
++        down_buffer_ptr: *const u8,
++        down_buffer_len: usize,
++    ) -> SeggerRttMemory<'a> {
+         SeggerRttMemory {
++            // TODO: only write this ID when the object is fully initialized, to avoid having
++            // these bytes elsewhere in (flash) memory.
+             // Must be "SEGGER RTT".
+-            id: *b"SEGGER RTT\0\0\0\0\0\0",
+-            number_up_buffers: 1,
+-            number_down_buffers: 1,
++            id: VolatileCell::new(*b"SEGGER RTT\0\0\0\0\0\0"),
++            number_up_buffers: VolatileCell::new(1),
++            number_down_buffers: VolatileCell::new(1),
+             up_buffer: SeggerRttBuffer {
+-                name: up_buffer_name.as_ptr(),
+-                buffer: up_buffer.as_ptr(),
+-                length: 1024,
+-                write_position: 0,
+-                read_position: 0,
+-                flags: 0,
++                name: VolatileCell::new(up_buffer_name.as_ptr()),
++                buffer: VolatileCell::new(up_buffer_ptr),
++                length: VolatileCell::new(up_buffer_len as u32),
++                write_position: VolatileCell::new(0),
++                read_position: VolatileCell::new(0),
++                flags: VolatileCell::new(0),
++                _lifetime: PhantomData,
+             },
+             down_buffer: SeggerRttBuffer {
+-                name: down_buffer_name.as_ptr(),
+-                buffer: down_buffer.as_ptr(),
+-                length: 32,
+-                write_position: 0,
+-                read_position: 0,
+-                flags: 0,
++                name: VolatileCell::new(down_buffer_name.as_ptr()),
++                buffer: VolatileCell::new(down_buffer_ptr),
++                length: VolatileCell::new(down_buffer_len as u32),
++                write_position: VolatileCell::new(0),
++                read_position: VolatileCell::new(0),
++                flags: VolatileCell::new(0),
++                _lifetime: PhantomData,
+             },
+         }
+     }
+@@ -159,9 +161,9 @@ impl SeggerRttMemory {
+ 
+ pub struct SeggerRtt<'a, A: hil::time::Alarm<'a>> {
+     alarm: &'a A, // Dummy alarm so we can get a callback.
+-    config: TakeCell<'a, SeggerRttMemory>,
+-    up_buffer: TakeCell<'static, [u8]>,
+-    _down_buffer: TakeCell<'static, [u8]>,
++    config: TakeCell<'a, SeggerRttMemory<'a>>,
++    up_buffer: TakeCell<'a, [u8]>,
++    _down_buffer: TakeCell<'a, [u8]>,
+     client: OptionalCell<&'a dyn uart::TransmitClient>,
+     client_buffer: TakeCell<'static, [u8]>,
+     tx_len: Cell<usize>,
+@@ -170,9 +172,9 @@ pub struct SeggerRtt<'a, A: hil::time::Alarm<'a>> {
+ impl<'a, A: hil::time::Alarm<'a>> SeggerRtt<'a, A> {
+     pub fn new(
+         alarm: &'a A,
+-        config: &'a mut SeggerRttMemory,
+-        up_buffer: &'static mut [u8],
+-        down_buffer: &'static mut [u8],
++        config: &'a mut SeggerRttMemory<'a>,
++        up_buffer: &'a mut [u8],
++        down_buffer: &'a mut [u8],
+     ) -> SeggerRtt<'a, A> {
+         SeggerRtt {
+             alarm: alarm,
+@@ -205,15 +207,15 @@ impl<'a, A: hil::time::Alarm<'a>> uart::Transmit<'a> for SeggerRtt<'a, A> {
+                     // Copy the incoming data into the buffer. Once we increment
+                     // the `write_position` the RTT listener will go ahead and read
+                     // the message from us.
+-                    let mut index = config.up_buffer.write_position as usize;
+-                    let buffer_len = config.up_buffer.length as usize;
++                    let mut index = config.up_buffer.write_position.get() as usize;
++                    let buffer_len = config.up_buffer.length.get() as usize;
+ 
+                     for i in 0..tx_len {
+                         buffer[(i + index) % buffer_len] = tx_data[i];
+                     }
+ 
+                     index = (index + tx_len) % buffer_len;
+-                    config.up_buffer.write_position = index as u32;
++                    config.up_buffer.write_position.set(index as u32);
+                     self.tx_len.set(tx_len);
+                     // Save the client buffer so we can pass it back with the callback.
+                     self.client_buffer.replace(tx_data);
+diff --git a/capsules/src/usb/mod.rs b/capsules/src/usb/mod.rs
+index e5c8d6ad..7af3da2e 100644
+--- a/capsules/src/usb/mod.rs
++++ b/capsules/src/usb/mod.rs
+@@ -1,4 +1,6 @@
+ pub mod descriptors;
++pub mod usb_ctap;
+ pub mod usb_user;
+ pub mod usbc_client;
+ pub mod usbc_client_ctrl;
++pub mod usbc_ctap_hid;
+diff --git a/chips/nrf52/src/nvmc.rs b/chips/nrf52/src/nvmc.rs
+index 5abd2d84..5a726fdb 100644
+--- a/chips/nrf52/src/nvmc.rs
++++ b/chips/nrf52/src/nvmc.rs
+@@ -3,6 +3,7 @@
+ //! Used in order read and write to internal flash.
+ 
+ use core::cell::Cell;
++use core::convert::TryFrom;
+ use core::ops::{Index, IndexMut};
+ use kernel::common::cells::OptionalCell;
+ use kernel::common::cells::TakeCell;
+@@ -11,7 +12,7 @@ use kernel::common::deferred_call::DeferredCall;
+ use kernel::common::registers::{register_bitfields, ReadOnly, ReadWrite};
+ use kernel::common::StaticRef;
+ use kernel::hil;
+-use kernel::ReturnCode;
++use kernel::{AppId, AppSlice, Callback, Driver, Grant, ReturnCode, Shared};
+ 
+ use crate::deferred_call_tasks::DeferredCallTask;
+ 
+@@ -141,7 +142,13 @@ register_bitfields! [u32,
+ static DEFERRED_CALL: DeferredCall<DeferredCallTask> =
+     unsafe { DeferredCall::new(DeferredCallTask::Nvmc) };
+ 
++type WORD = u32;
++const WORD_SIZE: usize = core::mem::size_of::<WORD>();
+ const PAGE_SIZE: usize = 4096;
++const MAX_WORD_WRITES: usize = 2;
++const MAX_PAGE_ERASES: usize = 10000;
++const WORD_MASK: usize = WORD_SIZE - 1;
++const PAGE_MASK: usize = PAGE_SIZE - 1;
+ 
+ /// This is a wrapper around a u8 array that is sized to a single page for the
+ /// nrf. Users of this module must pass an object of this type to use the
+@@ -215,6 +222,11 @@ impl Nvmc {
+         }
+     }
+ 
++    pub fn configure_readonly(&self) {
++        let regs = &*self.registers;
++        regs.config.write(Configuration::WEN::Ren);
++    }
++
+     /// Configure the NVMC to allow writes to flash.
+     pub fn configure_writeable(&self) {
+         let regs = &*self.registers;
+@@ -230,7 +242,7 @@ impl Nvmc {
+         let regs = &*self.registers;
+         regs.config.write(Configuration::WEN::Een);
+         while !self.is_ready() {}
+-        regs.erasepage.write(ErasePage::ERASEPAGE.val(0x10001000));
++        regs.eraseuicr.write(EraseUicr::ERASEUICR::ERASE);
+         while !self.is_ready() {}
+     }
+ 
+@@ -314,7 +326,7 @@ impl Nvmc {
+         // Put the NVMC in write mode.
+         regs.config.write(Configuration::WEN::Wen);
+ 
+-        for i in (0..data.len()).step_by(4) {
++        for i in (0..data.len()).step_by(WORD_SIZE) {
+             let word: u32 = (data[i + 0] as u32) << 0
+                 | (data[i + 1] as u32) << 8
+                 | (data[i + 2] as u32) << 16
+@@ -374,3 +386,178 @@ impl hil::flash::Flash for Nvmc {
+         self.erase_page(page_number)
+     }
+ }
++
++/// Provides access to the writeable flash regions of the application.
++///
++/// The purpose of this driver is to provide low-level access to the embedded flash of nRF52 boards
++/// to allow applications to implement flash-aware (like wear-leveling) data-structures. The driver
++/// only permits applications to operate on their writeable flash regions. The API is blocking since
++/// the CPU is halted during write and erase operations.
++///
++/// Supported boards:
++/// - nRF52840 (tested)
++/// - nRF52833
++/// - nRF52811
++/// - nRF52810
++///
++/// The maximum number of writes for the nRF52832 board is not per word but per block (512 bytes)
++/// and as such doesn't exactly fit this API. However, it could be safely supported by returning
++/// either 1 for the maximum number of word writes (i.e. the flash can only be written once before
++/// being erased) or 8 for the word size (i.e. the write granularity is doubled). In both cases,
++/// only 128 writes per block are permitted while the flash supports 181.
++///
++/// # Syscalls
++///
++/// - COMMAND(0): Check the driver.
++/// - COMMAND(1, 0): Get the word size (always 4).
++/// - COMMAND(1, 1): Get the page size (always 4096).
++/// - COMMAND(1, 2): Get the maximum number of word writes between page erasures (always 2).
++/// - COMMAND(1, 3): Get the maximum number page erasures in the lifetime of the flash (always
++///     10000).
++/// - COMMAND(2, ptr): Write the allow slice to the flash region starting at `ptr`.
++///   - `ptr` must be word-aligned.
++///   - The allow slice length must be word aligned.
++///   - The region starting at `ptr` of the same length as the allow slice must be in a writeable
++///     flash region.
++/// - COMMAND(3, ptr): Erase a page.
++///   - `ptr` must be page-aligned.
++///   - The page starting at `ptr` must be in a writeable flash region.
++/// - ALLOW(0): The allow slice for COMMAND(2).
++pub struct SyscallDriver {
++    nvmc: &'static Nvmc,
++    apps: Grant<App>,
++}
++
++pub const DRIVER_NUM: usize = 0x50003;
++
++#[derive(Default)]
++pub struct App {
++    /// The allow slice for COMMAND(2).
++    slice: Option<AppSlice<Shared, u8>>,
++}
++
++impl SyscallDriver {
++    pub fn new(nvmc: &'static Nvmc, apps: Grant<App>) -> SyscallDriver {
++        SyscallDriver { nvmc, apps }
++    }
++}
++
++fn is_write_needed(old: u32, new: u32) -> bool {
++    // No need to write if it would not modify the current value.
++    old & new != old
++}
++
++impl SyscallDriver {
++    /// Writes a word-aligned slice at a word-aligned address.
++    ///
++    /// Words are written only if necessary, i.e. if writing the new value would change the current
++    /// value. This can be used to simplify recovery operations (e.g. if power is lost during a
++    /// write operation). The application doesn't need to check which prefix has already been
++    /// written and may repeat the complete write that was interrupted.
++    ///
++    /// # Safety
++    ///
++    /// The words in this range must have been written less than `MAX_WORD_WRITES` since their last
++    /// page erasure.
++    ///
++    /// # Errors
++    ///
++    /// Fails with `EINVAL` if any of the following conditions does not hold:
++    /// - `ptr` must be word-aligned.
++    /// - `slice.len()` must be word-aligned.
++    /// - The slice starting at `ptr` of length `slice.len()` must fit in a writeable flash region.
++    fn write_slice(&self, appid: AppId, ptr: usize, slice: &[u8]) -> ReturnCode {
++        if !appid.in_writeable_flash_region(ptr, slice.len()) {
++            return ReturnCode::EINVAL;
++        }
++        if ptr & WORD_MASK != 0 || slice.len() & WORD_MASK != 0 {
++            return ReturnCode::EINVAL;
++        }
++        self.nvmc.configure_writeable();
++        for (i, chunk) in slice.chunks(WORD_SIZE).enumerate() {
++            // `unwrap` cannot fail because `slice.len()` is word-aligned (see above).
++            let val = WORD::from_ne_bytes(<[u8; WORD_SIZE]>::try_from(chunk).unwrap());
++            let loc = unsafe { &*(ptr as *const VolatileCell<u32>).add(i) };
++            if is_write_needed(loc.get(), val) {
++                loc.set(val);
++            }
++        }
++        while !self.nvmc.is_ready() {}
++        self.nvmc.configure_readonly();
++        ReturnCode::SUCCESS
++    }
++
++    /// Erases a page at a page-aligned address.
++    ///
++    /// # Errors
++    ///
++    /// Fails with `EINVAL` if any of the following conditions does not hold:
++    /// - `ptr` must be page-aligned.
++    /// - The slice starting at `ptr` of length `PAGE_SIZE` must fit in a writeable flash region.
++    fn erase_page(&self, appid: AppId, ptr: usize) -> ReturnCode {
++        if !appid.in_writeable_flash_region(ptr, PAGE_SIZE) {
++            return ReturnCode::EINVAL;
++        }
++        if ptr & PAGE_MASK != 0 {
++            return ReturnCode::EINVAL;
++        }
++        self.nvmc.erase_page_helper(ptr / PAGE_SIZE);
++        self.nvmc.configure_readonly();
++        ReturnCode::SUCCESS
++    }
++}
++
++impl Driver for SyscallDriver {
++    fn subscribe(&self, _: usize, _: Option<Callback>, _: AppId) -> ReturnCode {
++        ReturnCode::ENOSUPPORT
++    }
++
++    fn command(&self, cmd: usize, arg: usize, _: usize, appid: AppId) -> ReturnCode {
++        match (cmd, arg) {
++            (0, _) => ReturnCode::SUCCESS,
++
++            (1, 0) => ReturnCode::SuccessWithValue { value: WORD_SIZE },
++            (1, 1) => ReturnCode::SuccessWithValue { value: PAGE_SIZE },
++            (1, 2) => ReturnCode::SuccessWithValue {
++                value: MAX_WORD_WRITES,
++            },
++            (1, 3) => ReturnCode::SuccessWithValue {
++                value: MAX_PAGE_ERASES,
++            },
++            (1, _) => ReturnCode::EINVAL,
++
++            (2, ptr) => self
++                .apps
++                .enter(appid, |app, _| {
++                    let slice = match app.slice.take() {
++                        None => return ReturnCode::EINVAL,
++                        Some(slice) => slice,
++                    };
++                    self.write_slice(appid, ptr, slice.as_ref())
++                })
++                .unwrap_or_else(|err| err.into()),
++
++            (3, ptr) => self.erase_page(appid, ptr),
++
++            _ => ReturnCode::ENOSUPPORT,
++        }
++    }
++
++    fn allow(
++        &self,
++        appid: AppId,
++        allow_num: usize,
++        slice: Option<AppSlice<Shared, u8>>,
++    ) -> ReturnCode {
++        match allow_num {
++            0 => self
++                .apps
++                .enter(appid, |app, _| {
++                    app.slice = slice;
++                    ReturnCode::SUCCESS
++                })
++                .unwrap_or_else(|err| err.into()),
++            _ => ReturnCode::ENOSUPPORT,
++        }
++    }
++}
+diff --git a/chips/nrf52/src/usbd.rs b/chips/nrf52/src/usbd.rs
+index 8ddb5895..8c1992cc 100644
+--- a/chips/nrf52/src/usbd.rs
++++ b/chips/nrf52/src/usbd.rs
+@@ -1499,7 +1499,23 @@ impl<'a> Usbd<'a> {
+             if epdatastatus.is_set(status_epin(endpoint)) {
+                 let (transfer_type, direction, state) =
+                     self.descriptors[endpoint].state.get().bulk_state();
+-                assert_eq!(state, BulkState::InData);
++                match state {
++                    BulkState::InData => {
++                        // Totally expected state. Nothing to do.
++                    }
++                    BulkState::Init => {
++                        internal_warn!(
++                            "Received a stale epdata IN in an unexpected state: {:?}",
++                            state
++                        );
++                    }
++                    BulkState::OutDelay
++                    | BulkState::OutData
++                    | BulkState::OutDma
++                    | BulkState::InDma => {
++                        internal_err!("Unexpected state: {:?}", state);
++                    }
++                }
+                 self.descriptors[endpoint].state.set(EndpointState::Bulk(
+                     transfer_type,
+                     direction,
+@@ -1677,7 +1693,7 @@ impl<'a> Usbd<'a> {
+     }
+ 
+     fn transmit_in(&self, endpoint: usize) {
+-        debug_info!("transmit_in({})", endpoint);
++        debug_events!("transmit_in({})", endpoint);
+         let regs = &*self.registers;
+ 
+         self.client.map(|client| {
+@@ -1717,7 +1733,7 @@ impl<'a> Usbd<'a> {
+     }
+ 
+     fn transmit_out(&self, endpoint: usize) {
+-        debug_info!("transmit_out({})", endpoint);
++        debug_events!("transmit_out({})", endpoint);
+ 
+         let (transfer_type, direction, state) = self.descriptors[endpoint].state.get().bulk_state();
+         // Starting the DMA can only happen in the OutData state, i.e. after an EPDATA event.
+@@ -1882,11 +1898,13 @@ impl<'a> hil::usb::UsbController<'a> for Usbd<'a> {
+     }
+ 
+     fn endpoint_resume_in(&self, endpoint: usize) {
++        debug_events!("endpoint_resume_in({})", endpoint);
++
+         let (_, direction, _) = self.descriptors[endpoint].state.get().bulk_state();
+         assert!(direction.has_in());
+ 
+         if self.dma_pending.get() {
+-            debug_info!("requesting resume_in[{}]", endpoint);
++            debug_events!("requesting resume_in[{}]", endpoint);
+             // A DMA is already pending. Schedule the resume for later.
+             self.descriptors[endpoint].request_transmit_in.set(true);
+         } else {
+@@ -1896,6 +1914,8 @@ impl<'a> hil::usb::UsbController<'a> for Usbd<'a> {
+     }
+ 
+     fn endpoint_resume_out(&self, endpoint: usize) {
++        debug_events!("endpoint_resume_out({})", endpoint);
++
+         let (transfer_type, direction, state) = self.descriptors[endpoint].state.get().bulk_state();
+         assert!(direction.has_out());
+ 
+@@ -1914,7 +1934,7 @@ impl<'a> hil::usb::UsbController<'a> for Usbd<'a> {
+                 // happened in the meantime. This pending transaction will now
+                 // continue in transmit_out().
+                 if self.dma_pending.get() {
+-                    debug_info!("requesting resume_out[{}]", endpoint);
++                    debug_events!("requesting resume_out[{}]", endpoint);
+                     // A DMA is already pending. Schedule the resume for later.
+                     self.descriptors[endpoint].request_transmit_out.set(true);
+                 } else {
+@@ -1927,6 +1947,20 @@ impl<'a> hil::usb::UsbController<'a> for Usbd<'a> {
+             }
+         }
+     }
++
++    fn endpoint_cancel_in(&self, endpoint: usize) {
++        debug_events!("endpoint_cancel_in({})", endpoint);
++
++        let (transfer_type, direction, state) = self.descriptors[endpoint].state.get().bulk_state();
++        assert!(direction.has_in());
++        assert_eq!(state, BulkState::InData);
++
++        self.descriptors[endpoint].state.set(EndpointState::Bulk(
++            transfer_type,
++            direction,
++            BulkState::Init,
++        ));
++    }
+ }
+ 
+ fn status_epin(ep: usize) -> Field<u32, EndpointStatus::Register> {
+diff --git a/chips/nrf52840/src/lib.rs b/chips/nrf52840/src/lib.rs
+index 0c281276..7e9f7d1e 100644
+--- a/chips/nrf52840/src/lib.rs
++++ b/chips/nrf52840/src/lib.rs
+@@ -2,7 +2,7 @@
+ 
+ pub use nrf52::{
+     adc, aes, ble_radio, clock, constants, crt1, ficr, i2c, ieee802154_radio, init, nvmc, pinmux,
+-    ppi, pwm, rtc, spi, temperature, timer, trng, uart, uicr,
++    ppi, pwm, rtc, spi, temperature, timer, trng, uart, uicr, usbd,
+ };
+ pub mod chip;
+ pub mod gpio;
+diff --git a/chips/sam4l/src/usbc/mod.rs b/chips/sam4l/src/usbc/mod.rs
+index 35f3bb7c..28a0b9f9 100644
+--- a/chips/sam4l/src/usbc/mod.rs
++++ b/chips/sam4l/src/usbc/mod.rs
+@@ -1547,6 +1547,10 @@ impl hil::usb::UsbController<'a> for Usbc<'a> {
+         requests.resume_out = true;
+         self.requests[endpoint].set(requests);
+     }
++
++    fn endpoint_cancel_in(&self, _endpoint: usize) {
++        unimplemented!()
++    }
+ }
+ 
+ /// Static state to manage the USBC
+diff --git a/kernel/src/callback.rs b/kernel/src/callback.rs
+index ece4a443..9a1afc84 100644
+--- a/kernel/src/callback.rs
++++ b/kernel/src/callback.rs
+@@ -52,6 +52,31 @@ impl AppId {
+             (start, end)
+         })
+     }
++
++    pub fn in_writeable_flash_region(&self, ptr: usize, len: usize) -> bool {
++        self.kernel.process_map_or(false, self.idx, |process| {
++            let ptr = match ptr.checked_sub(process.flash_start() as usize) {
++                None => return false,
++                Some(ptr) => ptr,
++            };
++            (0..process.number_writeable_flash_regions()).any(|i| {
++                let (region_ptr, region_len) = process.get_writeable_flash_region(i);
++                let region_ptr = region_ptr as usize;
++                let region_len = region_len as usize;
++                // We want to check the 2 following inequalities:
++                // (1) `region_ptr <= ptr`
++                // (2) `ptr + len <= region_ptr + region_len`
++                // However, the second one may overflow written as is. We introduce a third
++                // inequality to solve this issue:
++                // (3) `len <= region_len`
++                // Using this third inequality, we can rewrite the second one as:
++                // (4) `ptr - region_ptr <= region_len - len`
++                // This fourth inequality is equivalent to the second one but doesn't overflow when
++                // the first and third inequalities hold.
++                region_ptr <= ptr && len <= region_len && ptr - region_ptr <= region_len - len
++            })
++        })
++    }
+ }
+ 
+ /// Type to uniquely identify a callback subscription across all drivers.
+diff --git a/kernel/src/hil/usb.rs b/kernel/src/hil/usb.rs
+index 846f5e93..64610fa5 100644
+--- a/kernel/src/hil/usb.rs
++++ b/kernel/src/hil/usb.rs
+@@ -27,6 +27,8 @@ pub trait UsbController<'a> {
+     fn endpoint_resume_in(&self, endpoint: usize);
+ 
+     fn endpoint_resume_out(&self, endpoint: usize);
++
++    fn endpoint_cancel_in(&self, endpoint: usize);
+ }
+ 
+ #[derive(Clone, Copy, Debug)]
