@@ -322,6 +322,6 @@ fi
 if [ "$install_app" != "none" ]
 then
   build_app_padding
-  tockloader flash "${tockloader_flags[@]}" -a 0x30000 "${tab_folder}/padding.bin"
-  tockloader install "${tockloader_flags[@]}" -a 0x40000 "${tab_folder}/${install_app}.tab"
+  #tockloader flash "${tockloader_flags[@]}" -a 0x30000 "${tab_folder}/padding.bin"
+  #tockloader install "${tockloader_flags[@]}" -a 0x40000 "${tab_folder}/${install_app}.tab"
 fi
