@@ -30,3 +30,7 @@ echo "Insert the dongle, make it go into DFU mode..."
 
 # flash the dongle
 nrfutil dfu usb-serial -pkg $OUTPUT/nrf52840.zip -p /dev/ttyACM0
+
+echo "Okay, make it go into DFU mode one more time..."
+nrfutil pkg generate --hw-version 52 --sd-req 0x00 --application-version 1 --application $OUTPUT/nrf52840_dongle.hex $OUTPUT/tock.zip
+nrfutil dfu usb-serial -pkg $OUTPUT/tock.zip -p /dev/ttyACM0
