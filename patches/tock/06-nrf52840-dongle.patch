@@ -1,13 +1,14 @@
 diff --git a/boards/nordic/nrf52840_dongle/Makefile b/boards/nordic/nrf52840_dongle/Makefile
-index 61dc5759..2326e82f 100644
+index 61dc5759..1dfb8073 100644
 --- a/boards/nordic/nrf52840_dongle/Makefile
 +++ b/boards/nordic/nrf52840_dongle/Makefile
-@@ -23,6 +23,10 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
+@@ -23,6 +23,11 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
  flash: target/$(TARGET)/release/$(PLATFORM).bin
  	$(TOCKLOADER) $(TOCKLOADER_GENERAL_FLAGS) flash --address $(KERNEL_ADDRESS) $(TOCKLOADER_JTAG_FLAGS) $<
  
 +target/$(TARGET)/release/$(PLATFORM).hex: target/$(TARGET)/release/$(PLATFORM).elf
 +	$(Q)objcopy --output-target=ihex $^ $@
++
 +
 +
  # Upload the kernel over serial/bootloader
@@ -28,10 +29,15 @@ index 657b0d26..58c85f5b 100644
  }
  
 diff --git a/boards/nordic/nrf52840_dongle/src/main.rs b/boards/nordic/nrf52840_dongle/src/main.rs
-index 31d0b392..814203ec 100644
+index 31d0b392..3b72db85 100644
 --- a/boards/nordic/nrf52840_dongle/src/main.rs
 +++ b/boards/nordic/nrf52840_dongle/src/main.rs
-@@ -11,7 +11,7 @@ use kernel::component::Component;
+@@ -7,11 +7,12 @@
+ #![no_main]
+ #![deny(missing_docs)]
+ 
++use cortexm4::scb;
+ use kernel::component::Component;
  #[allow(unused_imports)]
  use kernel::{debug, debug_gpio, debug_verbose, static_init};
  use nrf52840::gpio::Pin;
@@ -40,7 +46,7 @@ index 31d0b392..814203ec 100644
  
  // The nRF52840 Dongle LEDs
  const LED1_PIN: Pin = Pin::P0_06;
-@@ -60,6 +60,9 @@ pub unsafe fn reset_handler() {
+@@ -60,6 +61,9 @@ pub unsafe fn reset_handler() {
      // Loads relocations and clears BSS
      nrf52840::init();
  
@@ -50,7 +56,7 @@ index 31d0b392..814203ec 100644
      let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
      // GPIOs
      let gpio = components::gpio::GpioComponent::new(board_kernel).finalize(
-@@ -130,7 +133,7 @@ pub unsafe fn reset_handler() {
+@@ -130,7 +134,7 @@ pub unsafe fn reset_handler() {
          LED2_G_PIN,
          LED2_B_PIN,
          led,
@@ -59,7 +65,7 @@ index 31d0b392..814203ec 100644
          &SpiPins::new(SPI_MOSI, SPI_MISO, SPI_CLK),
          &None,
          button,
-@@ -140,6 +143,7 @@ pub unsafe fn reset_handler() {
+@@ -140,6 +144,7 @@ pub unsafe fn reset_handler() {
          FAULT_RESPONSE,
          nrf52840::uicr::Regulator0Output::V3_0,
          false,
