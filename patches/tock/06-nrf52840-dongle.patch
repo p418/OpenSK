@@ -41,9 +41,7 @@ index 31d0b392..3b72db85 100644
  #[allow(unused_imports)]
  use kernel::{debug, debug_gpio, debug_verbose, static_init};
  use nrf52840::gpio::Pin;
--use nrf52dk_base::{SpiPins, UartPins};
-+use nrf52dk_base::{SpiPins, UartChannel, UartPins};
- 
+
  // The nRF52840 Dongle LEDs
  const LED1_PIN: Pin = Pin::P0_06;
 @@ -60,6 +61,9 @@ pub unsafe fn reset_handler() {
@@ -60,8 +58,6 @@ index 31d0b392..3b72db85 100644
          LED2_G_PIN,
          LED2_B_PIN,
          led,
--        &UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD),
-+        UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD)),
          &SpiPins::new(SPI_MOSI, SPI_MISO, SPI_CLK),
          &None,
          button,
@@ -69,7 +65,6 @@ index 31d0b392..3b72db85 100644
          FAULT_RESPONSE,
          nrf52840::uicr::Regulator0Output::V3_0,
          false,
-+        &Some(&nrf52840::usbd::USBD),
          chip,
      );
  }
