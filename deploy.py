@@ -59,7 +59,7 @@ def fatal(msg):
       style_begin=colorama.Fore.RED + colorama.Style.BRIGHT,
       style_end=colorama.Style.RESET_ALL,
       message=msg))
-  sys.exit(1)
+  #sys.exit(1)
 
 
 def error(msg):
@@ -248,6 +248,10 @@ class OpenSKInstaller:
     fake_header.fields["total_size"] = 0x10000
     fake_header.fields["flags"] = 0
     padding = fake_header.get_binary()
+    info("Save padding")
+    padding_filename = os.path.join(self.tab_folder, "padding.bin")
+    with open(padding_filename, "wb") as f:
+        f.write(padding)
     info("Flashing padding application")
     args = copy.copy(self.tockloader_default_args)
     setattr(args, "address", 0x30000)
@@ -268,7 +272,7 @@ class OpenSKInstaller:
       tock.erase_apps(False)
     except TockLoaderException as e:
       # Erasing apps is not critical
-      info(("A non-critical error occured while erasing "
+      info(("A non-critical error occurred while erasing "
             "apps: {}".format(str(e))))
 
   def verify_flashed_app(self, expected_app):
