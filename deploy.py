@@ -138,7 +138,7 @@ class OpenSKInstaller:
         port=None,
     )
 
-  def checked_command_output(self, cmd):
+  def checked_command_output(self, cmd, **kwargs):
     cmd_output = ""
     try:
       cmd_output = subprocess.check_output(cmd)
@@ -170,8 +170,12 @@ class OpenSKInstaller:
     info("Rust toolchain up-to-date")
 
   def build_tockos(self):
+      # this is used during compilation of Tock OS
+      # to alter the vector table offset
+      dfu_env = os.environ
+      dfu_env["VECTOR_TABLE_OFFSET"] = "0x1000"
       self.checked_command_output(
-          ["make", "-C", SUPPORTED_BOARDS[self.args.board], "program"])
+          ["make", "-C", SUPPORTED_BOARDS[self.args.board], "program"], env=dfu_env)
       src_file = os.path.join(SUPPORTED_BOARDS[self.args.board], "target/thumbv7em-none-eabi/release/" + self.args.board + ".hex")
       shutil.copyfile(src_file, os.path.join(self.tab_folder, self.args.board + ".hex"))
 
