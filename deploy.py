@@ -336,7 +336,6 @@ class OpenSKInstaller:
         else:
             info("Building Tock for board {}".format(self.args.board))
             self.build_tockos()
-            #TODO
         return 0
 
     if self.args.action == "app":

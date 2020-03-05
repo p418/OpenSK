@@ -1,3 +1,32 @@
+diff --git a/boards/nordic/nrf52840_dongle/Makefile b/boards/nordic/nrf52840_dongle/Makefile
+index 61dc5759..437e7f45 100644
+--- a/boards/nordic/nrf52840_dongle/Makefile
++++ b/boards/nordic/nrf52840_dongle/Makefile
+@@ -23,6 +23,9 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
+ flash: target/$(TARGET)/release/$(PLATFORM).bin
+ 	$(TOCKLOADER) $(TOCKLOADER_GENERAL_FLAGS) flash --address $(KERNEL_ADDRESS) $(TOCKLOADER_JTAG_FLAGS) $<
+
++target/$(TARGET)/release/$(PLATFORM).hex: target/$(TARGET)/release/$(PLATFORM).elf
++	$(Q)objcopy --output-target=ihex $^ $@
++
+
+ # Upload the kernel over serial/bootloader
+ .PHONY: program
+ program: target/$(TARGET)/release/$(PLATFORM).hex
+diff --git a/boards/nordic/nrf52840_dongle/layout.ld b/boards/nordic/nrf52840_dongle/layout.ld
+index 657b0d26..58c85f5b 100644
+--- a/boards/nordic/nrf52840_dongle/layout.ld
++++ b/boards/nordic/nrf52840_dongle/layout.ld
+@@ -1,7 +1,7 @@
+ MEMORY
+ {
+-  rom (rx)  : ORIGIN = 0x00000000, LENGTH = 128K
+-  prog (rx) : ORIGIN = 0x00030000, LENGTH = 832K
++  rom (rx)  : ORIGIN = 0x00001000, LENGTH = 128K
++  prog (rx) : ORIGIN = 0x00030000, LENGTH = 704K
+   ram (rwx) : ORIGIN = 0x20000000, LENGTH = 256K
+ }
+
 diff --git a/boards/nordic/nrf52840_dongle/src/main.rs b/boards/nordic/nrf52840_dongle/src/main.rs
 index 9a8dccfd..858a29aa 100644
 --- a/boards/nordic/nrf52840_dongle/src/main.rs
