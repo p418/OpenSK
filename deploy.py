@@ -120,6 +120,8 @@ class OpenSKInstaller:
     self.args = args
     # Where all the TAB files should go
     self.tab_folder = os.path.join("target", "tab")
+    os.makedirs(self.tab_folder, exist_ok=True)
+
     # This is the filename that elf2tab command expects in order
     # to create a working TAB file.
     self.target_elf_filename = os.path.join(self.tab_folder, "cortex-m4.elf")
@@ -176,7 +178,9 @@ class OpenSKInstaller:
       dfu_env["VECTOR_TABLE_OFFSET"] = "0x1000"
       self.checked_command_output(
           ["make", "-C", SUPPORTED_BOARDS[self.args.board], "program"], env=dfu_env)
+
       src_file = os.path.join(SUPPORTED_BOARDS[self.args.board], "target/thumbv7em-none-eabi/release/" + self.args.board + ".hex")
+      info("Copying hex file: " + src_file)
       shutil.copyfile(src_file, os.path.join(self.tab_folder, self.args.board + ".hex"))
 
   def build_and_install_tockos(self):
