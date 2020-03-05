@@ -1,21 +1,35 @@
 diff --git a/boards/nordic/nrf52840_dongle/Makefile b/boards/nordic/nrf52840_dongle/Makefile
-index 61dc5759..437e7f45 100644
+index 61dc5759..b05ae495 100644
 --- a/boards/nordic/nrf52840_dongle/Makefile
 +++ b/boards/nordic/nrf52840_dongle/Makefile
-@@ -23,6 +23,9 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
+@@ -23,7 +23,10 @@ TOCKLOADER_JTAG_FLAGS = --jlink --board nrf52dk
  flash: target/$(TARGET)/release/$(PLATFORM).bin
  	$(TOCKLOADER) $(TOCKLOADER_GENERAL_FLAGS) flash --address $(KERNEL_ADDRESS) $(TOCKLOADER_JTAG_FLAGS) $<
-
+ 
 +target/$(TARGET)/release/$(PLATFORM).hex: target/$(TARGET)/release/$(PLATFORM).elf
 +	$(Q)objcopy --output-target=ihex $^ $@
 +
-
  # Upload the kernel over serial/bootloader
  .PHONY: program
  program: target/$(TARGET)/release/$(PLATFORM).hex
-
+-	$(error Cannot program nRF52 Dongle over USB. Use \`make flash\` and JTAG)
++	$(info Cannot program nRF52 Dongle over USB. Use \`make flash\` and JTAG)
+diff --git a/boards/nordic/nrf52840_dongle/layout.ld b/boards/nordic/nrf52840_dongle/layout.ld
+index 657b0d26..58c85f5b 100644
+--- a/boards/nordic/nrf52840_dongle/layout.ld
++++ b/boards/nordic/nrf52840_dongle/layout.ld
+@@ -1,7 +1,7 @@
+ MEMORY
+ {
+-  rom (rx)  : ORIGIN = 0x00000000, LENGTH = 128K
+-  prog (rx) : ORIGIN = 0x00030000, LENGTH = 832K
++  rom (rx)  : ORIGIN = 0x00001000, LENGTH = 128K
++  prog (rx) : ORIGIN = 0x00030000, LENGTH = 704K
+   ram (rwx) : ORIGIN = 0x20000000, LENGTH = 256K
+ }
+ 
 diff --git a/boards/nordic/nrf52840_dongle/src/main.rs b/boards/nordic/nrf52840_dongle/src/main.rs
-index 9a8dccfd..858a29aa 100644
+index 9a8dccfd..9008fb95 100644
 --- a/boards/nordic/nrf52840_dongle/src/main.rs
 +++ b/boards/nordic/nrf52840_dongle/src/main.rs
 @@ -7,6 +7,7 @@
@@ -26,17 +40,16 @@ index 9a8dccfd..858a29aa 100644
  use kernel::component::Component;
  #[allow(unused_imports)]
  use kernel::{debug, debug_gpio, debug_verbose, static_init};
-@@ -39,6 +40,9 @@ pub mod io;
+@@ -39,6 +40,8 @@ pub mod io;
  // How should the kernel respond when a process faults.
  const FAULT_RESPONSE: kernel::procs::FaultResponse = kernel::procs::FaultResponse::Panic;
  
 +const VECTOR_TABLE_OFFSET: Option<&'static str> = option_env!("VECTOR_TABLE_OFFSET");
 +
-+
  // Number of concurrent processes this platform supports.
  const NUM_PROCS: usize = 8;
  
-@@ -63,6 +67,16 @@ pub unsafe fn reset_handler() {
+@@ -63,6 +66,16 @@ pub unsafe fn reset_handler() {
      // Loads relocations and clears BSS
      nrf52840::init();
  
