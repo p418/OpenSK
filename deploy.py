@@ -25,6 +25,8 @@ import shutil
 import subprocess
 import sys
 
+from intelhex import bin2hex
+
 import colorama
 from tockloader.exceptions import TockLoaderException
 from tockloader import tab, tbfh, tockloader
@@ -167,9 +169,15 @@ class OpenSKInstaller:
           ["rustup", "target", "add", "thumbv7em-none-eabi"])
     info("Rust toolchain up-to-date")
 
+  def build_tockos(self):
+      self.checked_command_output(
+          ["make", "-C", SUPPORTED_BOARDS[self.args.board], "program"])
+      src_file = os.path.join(SUPPORTED_BOARDS[self.args.board], "target/thumbv7em-none-eabi/release/" + self.args.board + ".hex")
+      shutil.copyfile(src_file, os.path.join(self.tab_folder, self.args.board + ".hex"))
+
   def build_and_install_tockos(self):
-    self.checked_command_output(
-        ["make", "-C", SUPPORTED_BOARDS[self.args.board], "flash"])
+      self.checked_command_output(
+          ["make", "-C", SUPPORTED_BOARDS[self.args.board], "flash"])
 
   def build_and_install_example(self):
     assert self.args.application
@@ -226,20 +234,24 @@ class OpenSKInstaller:
         "--protected-region-size=64"
     ])
     self.install_padding()
-    info("Installing Tock application {}".format(self.args.application))
-    args = copy.copy(self.tockloader_default_args)
-    setattr(args, "app_address", 0x40000)
-    setattr(args, "erase", self.args.clear_apps)
-    setattr(args, "make", False)
-    setattr(args, "no_replace", False)
-    tock = tockloader.TockLoader(args)
-    tock.open(args)
-    tabs = [tab.TAB(tab_filename)]
-    try:
-      tock.install(tabs, replace="yes", erase=args.erase)
-    except TockLoaderException as e:
-      fatal("Couldn't install Tock application {}: {}".format(
-          self.args.application, str(e)))
+    if not self.args.dfu:
+        info("Installing Tock application {}".format(self.args.application))
+        args = copy.copy(self.tockloader_default_args)
+        setattr(args, "app_address", 0x40000)
+        setattr(args, "erase", self.args.clear_apps)
+        setattr(args, "make", False)
+        setattr(args, "no_replace", False)
+        tock = tockloader.TockLoader(args)
+        tock.open(args)
+        tabs = [tab.TAB(tab_filename)]
+        try:
+            tock.install(tabs, replace="yes", erase=args.erase)
+        except TockLoaderException as e:
+            fatal("Couldn't install Tock application {}: {}".format(
+            self.args.application, str(e)))
+    else:
+        self.padding_to_hex()
+        self.app_to_hex()
 
   def install_padding(self):
     fake_header = tbfh.TBFHeader("")
@@ -248,21 +260,39 @@ class OpenSKInstaller:
     fake_header.fields["total_size"] = 0x10000
     fake_header.fields["flags"] = 0
     padding = fake_header.get_binary()
-    info("Save padding")
-    padding_filename = os.path.join(self.tab_folder, "padding.bin")
-    with open(padding_filename, "wb") as f:
-        f.write(padding)
-    info("Flashing padding application")
-    args = copy.copy(self.tockloader_default_args)
-    setattr(args, "address", 0x30000)
-    tock = tockloader.TockLoader(args)
-    tock.open(args)
-    try:
-      tock.flash_binary(padding, args.address)
-    except TockLoaderException as e:
-      fatal("Couldn't install padding: {}".format(str(e)))
+    if self.args.dfu:
+        info("Save padding")
+        padding_filename = os.path.join(self.tab_folder, "padding.bin")
+        with open(padding_filename, "wb") as f:
+            f.write(padding)
+    else:
+        info("Flashing padding application")
+        args = copy.copy(self.tockloader_default_args)
+        setattr(args, "address", 0x30000)
+        tock = tockloader.TockLoader(args)
+        tock.open(args)
+        try:
+            tock.flash_binary(padding, args.address)
+        except TockLoaderException as e:
+            fatal("Couldn't install padding: {}".format(str(e)))
+
+  def padding_to_hex(self):
+      info("Creating ihex from padding")
+      input_file = os.path.join(self.tab_folder, "padding.bin")
+      output_file = os.path.join(self.tab_folder, "padding.hex")
+      bin2hex(input_file, output_file, 0x30000)
+
+  def app_to_hex(self):
+      info("Creating ihex from application")
+      input_file = os.path.join(self.tab_folder, "cortex-m4.tbf")
+      output_file = os.path.join(self.tab_folder, "cortex-m4.hex")
+      bin2hex(input_file, output_file, 0x40000)
 
   def clear_apps(self):
+    if self.args.dfu:
+        #not able to erase
+        return
+
     args = copy.copy(self.tockloader_default_args)
     setattr(args, "app_address", 0x40000)
     info("Erasing all installed applications")
@@ -276,6 +306,10 @@ class OpenSKInstaller:
             "apps: {}".format(str(e))))
 
   def verify_flashed_app(self, expected_app):
+    if self.args.dfu:
+        #not able to verify
+        return True
+
     args = copy.copy(self.tockloader_default_args)
     tock = tockloader.TockLoader(args)
     app_found = False
@@ -292,9 +326,14 @@ class OpenSKInstaller:
     self.update_rustc_if_needed()
 
     if self.args.action == "os":
-      info("Installing Tock on board {}".format(self.args.board))
-      self.build_and_install_tockos()
-      return 0
+        if not self.args.dfu:
+            info("Installing Tock on board {}".format(self.args.board))
+            self.build_and_install_tockos()
+        else:
+            info("Building Tock for board {}".format(self.args.board))
+            self.build_tockos()
+            #TODO
+        return 0
 
     if self.args.action == "app":
       if self.args.application is None:
@@ -356,6 +395,14 @@ if __name__ == '__main__':
       choices=get_supported_boards(),
       help="Indicates which board Tock OS will be compiled for.",
       required=True)
+  
+  os_commands.add_argument(
+      "--dfu",
+      action="append_const",
+      const="dfu",
+      dest="dfu",
+      help="Indicates that Tock OS should be flashed using DFU.",
+      required=False)
 
   app_commands = commands.add_parser(
       "app",
@@ -397,6 +444,15 @@ if __name__ == '__main__':
             "(i.e. more debug messages will be sent over the console port "
             "such as hexdumps of packets)."),
   )
+  
+  app_commands.add_argument(
+      "--dfu",
+      action="append_const",
+      const="dfu",
+      dest="dfu",
+      help="Indicates that the app should be flashed using DFU.",
+      required=False)
+
   apps_group = app_commands.add_mutually_exclusive_group()
   apps_group.add_argument(
       "--opensk",
